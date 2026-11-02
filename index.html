@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Shorts-Format Converter</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bangers&display=swap">
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--text:#1b1b1f;--muted:#6b6b75;--line:#e2e0da;--accent:#e8432e;--accent-t:#fff;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#141416;--card:#1e1e22;--text:#f2f2f4;--muted:#9a9aa5;--line:#32323a;--accent:#ff5a44;--accent-t:#111}}
+:root[data-theme="dark"]{--bg:#141416;--card:#1e1e22;--text:#f2f2f4;--muted:#9a9aa5;--line:#32323a;--accent:#ff5a44;--accent-t:#111}
+*{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:920px;margin:0 auto;padding:20px 16px 40px}
+h1{font-size:1.5rem;margin:0 0 4px}
+p.sub{margin:0 0 18px;color:var(--muted)}
+.grid{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:760px){.grid{grid-template-columns:1fr 340px;align-items:start}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px}
+label{display:block;font-size:.85rem;color:var(--muted);margin:12px 0 4px}
+label:first-child{margin-top:0}
+input[type=text]{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
+input[type=file]{width:100%;font:inherit;color:var(--text)}
+button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:12px 16px;cursor:pointer;background:var(--accent);color:var(--accent-t);width:100%;margin-top:14px}
+button.sec{background:transparent;color:var(--text);border:1px solid var(--line)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.stage{display:flex;justify-content:center}
+canvas{width:100%;max-width:340px;aspect-ratio:9/16;border-radius:12px;background:#000;border:1px solid var(--line)}
+.bar{height:8px;border-radius:6px;background:var(--line);overflow:hidden;margin-top:14px;display:none}
+.bar i{display:block;height:100%;width:0;background:var(--accent)}
+#status{font-size:.9rem;color:var(--muted);margin-top:10px;min-height:1.3em}
+.note{font-size:.8rem;color:var(--muted);margin-top:10px}
+</style>
+</head>
+<body>
+<main>
+  <h1>Shorts-Format Converter</h1>
+  <p class="sub">Video rein → 9:16 mit unscharfem Hintergrund, Titel &amp; Handle → Download. Alles läuft lokal in deinem Browser.</p>
+  <div class="grid">
+    <div class="card">
+      <label for="file">Video auswählen</label>
+      <input id="file" type="file" accept="video/*">
+      <label for="title">Titel (oben)</label>
+      <input id="title" type="text" value="SOUTH PARK BEST MOMENTS">
+      <label for="handle">Handle (unten links)</label>
+      <input id="handle" type="text" value="@southparkbestmoments1">
+      <label for="logo">Logo unten rechts (optional)</label>
+      <input id="logo" type="file" accept="image/*">
+      <button id="go" disabled>Umwandeln</button>
+      <div class="bar" id="bar"><i id="fill"></i></div>
+      <div id="status"></div>
+      <button id="tt" style="display:none">An TikTok senden</button>
+      <button id="dl" class="sec" style="display:none">Video herunterladen</button>
+      <a id="ttlink" href="https://www.tiktok.com/upload" target="_blank" rel="noopener" style="display:none;margin-top:12px;font-size:.9rem;color:var(--accent)">TikTok-Upload im Browser öffnen →</a>
+      <div class="note">Die Umwandlung läuft in Echtzeit (Video-Länge = Wartezeit). Tab dabei offen und im Vordergrund lassen.</div>
+    </div>
+    <div class="stage"><canvas id="cv" width="1080" height="1920"></canvas></div>
+  </div>
+</main>
+<script>
+const W=1080,H=1920;
+const cv=document.getElementById('cv'),ctx=cv.getContext('2d');
+const $=id=>document.getElementById(id);
+const fileIn=$('file'),titleIn=$('title'),handleIn=$('handle'),logoIn=$('logo');
+const go=$('go'),dl=$('dl'),bar=$('bar'),fill=$('fill'),statusEl=$('status');
+const small=document.createElement('canvas');small.width=36;small.height=64;
+const sctx=small.getContext('2d');
+let video=null,logoImg=null,recording=false,result=null,fileName='video';
+const FONT='"Bangers",Impact,"Arial Black",sans-serif';
+
+function setStatus(t){statusEl.textContent=t}
+
+function outlined(text,x,y,size,align,maxW,stroke){
+  ctx.font=size+'px '+FONT;
+  let s=size;
+  if(maxW){const w=ctx.measureText(text).width;if(w>maxW){s=Math.floor(size*maxW/w);ctx.font=s+'px '+FONT}}
+  ctx.textAlign=align;ctx.textBaseline='middle';ctx.lineJoin='round';
+  ctx.lineWidth=stroke;ctx.strokeStyle='#000';ctx.strokeText(text,x,y);
+  ctx.fillStyle='#fff';ctx.fillText(text,x,y);
+}
+
+function draw(){
+  ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
+  if(!video||!video.videoWidth)return;
+  const vw=video.videoWidth,vh=video.videoHeight;
+  // blurred background: draw tiny cover version, scale up
+  const sc=Math.max(small.width/vw,small.height/vh);
+  const dw=vw*sc,dh=vh*sc;
+  sctx.drawImage(video,(small.width-dw)/2,(small.height-dh)/2,dw,dh);
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+  ctx.drawImage(small,0,0,W,H);
+  ctx.fillStyle='rgba(0,0,0,.18)';ctx.fillRect(0,0,W,H);
+  // main video centered
+  const f=Math.min(W/vw,H/vh);
+  const w=vw*f,h=vh*f,x=(W-w)/2,y=(H-h)/2;
+  ctx.drawImage(video,x,y,w,h);
+  // title on top edge of video
+  const t=titleIn.value.trim().toUpperCase();
+  if(t)outlined(t,W/2,Math.max(y,70),112,'center',W-80,18);
+  // handle bottom-left
+  const hd=handleIn.value.trim().toUpperCase();
+  if(hd)outlined(hd,x+30,y+h-50,40,'left',w*0.6,8);
+  // logo bottom-right
+  if(logoImg){
+    const lh=Math.min(170,h*0.18),lw=logoImg.width*lh/logoImg.height;
+    ctx.drawImage(logoImg,x+w-lw-24,y+h-lh-24,lw,lh);
+  }
+}
+
+function loadFile(f){
+  result=null;dl.style.display='none';bar.style.display='none';
+  if(video){video.pause();URL.revokeObjectURL(video.src)}
+  fileName=f.name.replace(/\.[^.]+$/,'')||'video';
+  video=document.createElement('video');
+  video.playsInline=true;video.preload='auto';video.src=URL.createObjectURL(f);
+  video.addEventListener('loadeddata',()=>{video.currentTime=0.05});
+  video.addEventListener('seeked',()=>{if(!recording)draw()});
+  video.addEventListener('error',()=>setStatus('Dieses Video-Format kann dein Browser nicht lesen.'));
+  video.addEventListener('loadedmetadata',()=>{go.disabled=false;setStatus('Bereit. Dauer: '+Math.round(video.duration)+' s')});
+}
+
+fileIn.addEventListener('change',()=>{if(fileIn.files[0])loadFile(fileIn.files[0])});
+[titleIn,handleIn].forEach(e=>e.addEventListener('input',()=>{if(!recording)draw()}));
+logoIn.addEventListener('change',()=>{
+  const f=logoIn.files[0];
+  if(!f){logoImg=null;draw();return}
+  const im=new Image();im.onload=()=>{logoImg=im;if(!recording)draw()};im.src=URL.createObjectURL(f);
+});
+if(document.fonts)document.fonts.load('40px Bangers').then(()=>draw()).catch(()=>{});
+
+function pickMime(){
+  const c=['video/mp4;codecs=avc1.42E01E,mp4a.40.2','video/mp4','video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm'];
+  for(const m of c){if(window.MediaRecorder&&MediaRecorder.isTypeSupported(m))return m}
+  return '';
+}
+
+go.addEventListener('click',async()=>{
+  if(!video||recording)return;
+  if(!window.MediaRecorder){setStatus('Dein Browser unterstützt die Aufnahme nicht. Bitte Chrome, Edge, Firefox oder Safari nutzen.');return}
+  recording=true;go.disabled=true;dl.style.display='none';result=null;
+  bar.style.display='block';fill.style.width='0%';
+  setStatus('Wird umgewandelt…');
+  try{await document.fonts.load('40px Bangers')}catch(e){}
+  try{
+    video.currentTime=0;
+    await new Promise(r=>{if(video.currentTime===0)r();else video.addEventListener('seeked',r,{once:true})});
+    const AC=window.AudioContext||window.webkitAudioContext;
+    const ac=new AC();await ac.resume();
+    const dest=ac.createMediaStreamDestination();
+    try{ac.createMediaElementSource(video).connect(dest)}catch(e){}
+    const stream=cv.captureStream(30);
+    dest.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
+    const mime=pickMime();
+    const rec=new MediaRecorder(stream,mime?{mimeType:mime,videoBitsPerSecond:8000000}:{videoBitsPerSecond:8000000});
+    const chunks=[];
+    rec.ondataavailable=e=>{if(e.data&&e.data.size)chunks.push(e.data)};
+    const done=new Promise(r=>rec.onstop=r);
+    rec.start(500);
+    await video.play();
+    let raf;
+    const loop=()=>{
+      draw();
+      fill.style.width=Math.min(100,video.currentTime/video.duration*100)+'%';
+      if(!video.ended)raf=requestAnimationFrame(loop);
+    };
+    loop();
+    await new Promise(r=>video.addEventListener('ended',r,{once:true}));
+    cancelAnimationFrame(raf);draw();
+    await new Promise(r=>setTimeout(r,300));
+    rec.stop();await done;
+    ac.close();
+    const type=(rec.mimeType||mime||'video/webm');
+    const ext=type.includes('mp4')?'mp4':'webm';
+    result={blob:new Blob(chunks,{type}),ext};
+    fill.style.width='100%';
+    setStatus('Fertig! ('+(result.blob.size/1048576).toFixed(1)+' MB, .'+ext+')');
+    dl.style.display='block';
+  }catch(err){
+    setStatus('Fehler: '+(err&&err.message?err.message:err));
+  }
+  recording=false;go.disabled=false;
+});
+
+dl.addEventListener('click',async()=>{
+  if(!result)return;
+  const name=fileName+'_9x16.'+result.ext;
+  let used=false;
+  try{
+    const d=await claude.use('downloads');
+    if(d){used=true;await d.save({filename:name,data:result.blob});setStatus('Gespeichert.');}
+  }catch(e){
+    if(e&&e.code==='declined'){setStatus('Download abgebrochen.');return}
+    used=false;
+  }
+  if(!used){
+    const a=document.createElement('a');a.href=URL.createObjectURL(result.blob);a.download=name;
+    document.body.appendChild(a);a.click();a.remove();
+  }
+});
+const tt=$('tt'),ttlink=$('ttlink');
+new MutationObserver(()=>{const v=dl.style.display!=='none';tt.style.display=v?'block':'none';ttlink.style.display=v?'inline-block':'none'}).observe(dl,{attributes:true,attributeFilter:['style']});
+tt.addEventListener('click',async()=>{
+  if(!result)return;
+  const name=fileName+'_9x16.'+result.ext;
+  const file=new File([result.blob],name,{type:result.blob.type});
+  try{
+    if(navigator.canShare&&navigator.canShare({files:[file]})){
+      await navigator.share({files:[file]});
+      setStatus('Wähle im Teilen-Menü TikTok aus.');
+      return;
+    }
+  }catch(e){
+    if(e&&e.name==='AbortError')return;
+  }
+  dl.click();
+  setStatus('Direktes Teilen geht hier nicht. Speichere das Video und lade es dann bei TikTok hoch (Link unten).');
+});
+draw();
+</script>
+</body>
+</html>
